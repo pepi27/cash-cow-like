@@ -270,12 +270,19 @@ export class Grid extends Container {
 
             // after fade animation, clear others and collapse
             await new Promise((resolve) => setTimeout(resolve, 220));
-            // clear non-target selected cells
+            // clear non-target selected cells and remove their highlights immediately
             for (let s of sel) {
                 if (s === target) continue;
-                s.cell.setValue(null);
-                s.cell.alpha = 1;
+                try {
+                    s.cell.setValue(null);
+                    s.cell.alpha = 1;
+                    this._highlightCell(s.cell, false);
+                } catch (e) {}
             }
+
+            // keep only the target selected so the path clears; update visuals before collapse
+            this._selection = [target];
+            this._updatePathGraphics();
 
             await this._collapseColumn();
             if (this.autoMerge) await this._autoMergeLoop();
@@ -289,8 +296,12 @@ export class Grid extends Container {
 
     _updatePathGraphics() {
         const g = this.pathGraphics;
+        // always clear first
         g.clear();
-        if (!this._selection || this._selection.length === 0) return;
+        if (!this._selection || this._selection.length < 2) {
+            // nothing to draw for 0 or 1 selection entries
+            return;
+        }
         g.lineStyle(6, 0xffffff, 0.18);
         // draw circles and connecting lines
         const points = this._selection.map((s) => ({ x: s.cell.x, y: s.cell.y }));
@@ -459,6 +470,19 @@ export class Grid extends Container {
 
         return Promise.all(animations).then(() => {
             this.interactive = true;
+            // ensure any leftover path visuals are removed after collapse completes
+            try {
+                if (this.pathGraphics) this.pathGraphics.clear();
+                // also remove any lingering highlights on cells
+                if (this._selection && this._selection.length) {
+                    this._selection.forEach((s) => {
+                        try {
+                            this._highlightCell(s.cell, false);
+                        } catch (e) {}
+                    });
+                }
+                this._selection = [];
+            } catch (e) {}
         });
     }
 
