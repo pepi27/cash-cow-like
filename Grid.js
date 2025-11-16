@@ -385,6 +385,10 @@ export class Grid extends Container {
 
                 if (r < emptyCount) {
                     // spawn new falling square from above
+                    // hide the destination cell until the spawn lands so it doesn't show as empty
+                    try {
+                        destCell.visible = false;
+                    } catch (e) {}
                     const spawn = new SquareWithText(targetVal, {
                         size: this.squareSize,
                         fontSize: Math.min(32, this.squareSize / 2),
@@ -406,6 +410,9 @@ export class Grid extends Container {
                                         ? Number(targetVal)
                                         : targetVal
                                 );
+                                try {
+                                    destCell.visible = true;
+                                } catch (e) {}
                                 this.removeChild(spawn);
                                 resolve();
                             },
@@ -430,6 +437,10 @@ export class Grid extends Container {
                     const sourceCell = foundIdx >= 0 ? srcCells[foundIdx] : null;
 
                     if (sourceCell) {
+                        // hide destination until the temp arrives
+                        try {
+                            destCell.visible = false;
+                        } catch (e) {}
                         // create temp visual at source and animate to dest
                         const temp = new SquareWithText(sourceCell.value, {
                             size: this.squareSize,
@@ -454,6 +465,9 @@ export class Grid extends Container {
                                             ? Number(valueToPlace)
                                             : valueToPlace
                                     );
+                                    try {
+                                        destCell.visible = true;
+                                    } catch (e) {}
                                     this.removeChild(temp);
                                     resolve();
                                 },
@@ -467,6 +481,9 @@ export class Grid extends Container {
                                 ? Number(valueToPlace)
                                 : valueToPlace
                         );
+                        try {
+                            destCell.visible = true;
+                        } catch (e) {}
                     }
                 }
             }
@@ -484,6 +501,15 @@ export class Grid extends Container {
                             this._highlightCell(s.cell, false);
                         } catch (e) {}
                     });
+                }
+                // ensure all cells are visible after collapse
+                for (let rr = 0; rr < this.rows; rr++) {
+                    for (let cc = 0; cc < this.cols; cc++) {
+                        try {
+                            const c = this._cells[rr][cc];
+                            if (c) c.visible = true;
+                        } catch (e) {}
+                    }
                 }
                 this._selection = [];
             } catch (e) {}
