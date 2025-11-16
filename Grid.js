@@ -159,6 +159,38 @@ export class Grid extends Container {
         return Math.abs(r1 - r2) + Math.abs(c1 - c2) === 1;
     }
 
+    // prefer inner content scale if the SquareWithText exposes it
+    _getScaleTarget(cell) {
+        if (!cell) return { x: 1, y: 1 };
+        return cell.content && cell.content.scale ? cell.content.scale : cell.scale;
+    }
+
+    // show / hide a lightweight highlight overlay on a cell
+    _highlightCell(cell, on) {
+        if (!cell) return;
+        try {
+            if (on) {
+                if (cell._hl) return; // already highlighted
+                const g = new Graphics();
+                const size =
+                    typeof cell._size === 'number' && cell._size > 0 ? cell._size : this.squareSize;
+                g.beginFill(0xffffff, 0.06);
+                g.drawRoundedRect(-size / 2, -size / 2, size, size, Math.max(6, size * 0.08));
+                g.endFill();
+                cell.addChild(g);
+                cell._hl = g;
+            } else {
+                if (cell._hl) {
+                    try {
+                        cell.removeChild(cell._hl);
+                        cell._hl.destroy();
+                    } catch (e) {}
+                    cell._hl = null;
+                }
+            }
+        } catch (e) {}
+    }
+
     _onPointerDown(e) {
         const global = e.data.global;
         const hit = this.getCellAtPoint(global.x, global.y);
@@ -538,22 +570,36 @@ export class Grid extends Container {
         if (cell.value === 500) {
             // collect gold: increment score and clear cell
             this.score += 500;
-            // small pop and fade
-            gsap.to(cell.scale, { x: 1.3, y: 1.3, duration: 0.12, yoyo: true, repeat: 1 });
-            gsap.to(cell, {
-                alpha: 0,
-                duration: 0.22,
-                onComplete: async () => {
-                    cell.setValue(null);
-                    cell.alpha = 1;
-                    // refill/collapse to settle the grid after collection
-                    try {
-                        await this._collapseColumn();
-                    } catch (err) {
-                        // ignore
-                    }
-                },
-            });
+            // small pop and fade using inner content scale when available
+            try {
+                gsap.to(this._getScaleTarget(cell), {
+                    x: 1.3,
+                    y: 1.3,
+                    duration: 0.12,
+                    yoyo: true,
+                    repeat: 1,
+                });
+            } catch (e) {}
+            try {
+                gsap.to(cell, {
+                    alpha: 0,
+                    duration: 0.22,
+                    onComplete: async () => {
+                        try {
+                            cell.setValue(null);
+                        } catch (e) {}
+                        try {
+                            cell.alpha = 1;
+                        } catch (e) {}
+                        // refill/collapse to settle the grid after collection
+                        try {
+                            await this._collapseColumn();
+                        } catch (err) {
+                            // ignore
+                        }
+                    },
+                });
+            } catch (e) {}
         }
     }
 }
