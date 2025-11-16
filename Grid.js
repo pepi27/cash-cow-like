@@ -21,8 +21,8 @@ export class Grid extends Container {
             textGenerator = (r, c) => `${r},${c}`,
             squareOptions = {},
             autoMerge = false,
-            values = [1, 5, 10, 25, 50, 100],
-            weights = [0.35, 0.18, 0.12, 0.06, 0.03, 0.01],
+            values = [1, 5, 10, 25, 50, 100, 500],
+            weights = [0.36, 0.18, 0.12, 0.06, 0.03, 0.01, 0],
         } = options;
 
         this.rows = rows;
@@ -266,6 +266,10 @@ export class Grid extends Container {
                     },
                 }
             );
+            // add merged value to the score
+            try {
+                this.score = (Number(this.score) || 0) + Number(sum);
+            } catch (e) {}
             target.cell.setValue(Number(sum));
 
             // after fade animation, clear others and collapse
@@ -285,7 +289,7 @@ export class Grid extends Container {
             this._updatePathGraphics();
 
             await this._collapseColumn();
-            if (this.autoMerge) await this._autoMergeLoop();
+            // auto-merge disabled: do not run the automatic merge loop here
         } else {
             // un-highlight
             sel.forEach((s) => this._highlightCell(s.cell, false));
@@ -486,7 +490,6 @@ export class Grid extends Container {
         });
     }
 
-    // find groups of connected cells with same value (4-way), returns array of groups (each group is array of {r,c})
     _findGroups() {
         const visited = Array.from({ length: this.rows }, () => Array(this.cols).fill(false));
         const groups = [];
@@ -527,103 +530,8 @@ export class Grid extends Container {
         return groups;
     }
 
-    // auto-merge loop: find groups >= minCollectLen and apply merge+collapse until none remain
-    async _autoMergeLoop() {
-        while (true) {
-            const groups = this._findGroups().filter((g) => g.cells.length >= this.minCollectLen);
-            if (!groups.length) break;
-            // process groups sequentially to avoid conflicts
-            for (let grp of groups) {
-                // pick target as last cell in group
-                const last = grp.cells[grp.cells.length - 1];
-                const value = grp.value;
-                // determine next value by index; if value not found, just use same
-                const idx = this.values.findIndex((v) => v === value);
-                const nextVal =
-                    idx >= 0 ? this.values[Math.min(idx + 1, this.values.length - 1)] : value;
-
-                // animate non-target cells fade
-                for (let cellRef of grp.cells) {
-                    const cell = this._cells[cellRef.r][cellRef.c];
-                    if (cellRef.r === last.r && cellRef.c === last.c) continue;
-                    gsap.to(cell, { alpha: 0, duration: 0.18 });
-                }
-
-                // upgrade target
-                const targetCell = this._cells[last.r][last.c];
-                gsap.fromTo(
-                    targetCell.scale,
-                    { x: 0.6, y: 0.6 },
-                    {
-                        x: 1.2,
-                        y: 1.2,
-                        duration: 0.18,
-                        ease: 'power2.out',
-                        onComplete: () => {
-                            gsap.to(targetCell.scale, {
-                                x: 1,
-                                y: 1,
-                                duration: 0.12,
-                                ease: 'power2.in',
-                            });
-                        },
-                    }
-                );
-                targetCell.setValue(Number.isFinite(Number(nextVal)) ? Number(nextVal) : nextVal);
-
-                // after fade, clear others and collapse
-                await new Promise((resolve) => setTimeout(resolve, 240));
-                for (let cellRef of grp.cells) {
-                    if (cellRef.r === last.r && cellRef.c === last.c) continue;
-                    const cell = this._cells[cellRef.r][cellRef.c];
-                    cell.setValue(null);
-                    cell.alpha = 1;
-                }
-
-                await this._collapseColumn();
-            }
-            // loop to detect new groups after collapse
-        }
-    }
-
+    // _onTap intentionally does nothing: tapping no longer collects special gold values or triggers merges.
     _onTap(e) {
-        const global = e.data.global;
-        const hit = this.getCellAtPoint(global.x, global.y);
-        if (!hit) return;
-        const { r, c, cell } = hit;
-        if (cell.value === 500) {
-            // collect gold: increment score and clear cell
-            this.score += 500;
-            // small pop and fade using inner content scale when available
-            try {
-                gsap.to(this._getScaleTarget(cell), {
-                    x: 1.3,
-                    y: 1.3,
-                    duration: 0.12,
-                    yoyo: true,
-                    repeat: 1,
-                });
-            } catch (e) {}
-            try {
-                gsap.to(cell, {
-                    alpha: 0,
-                    duration: 0.22,
-                    onComplete: async () => {
-                        try {
-                            cell.setValue(null);
-                        } catch (e) {}
-                        try {
-                            cell.alpha = 1;
-                        } catch (e) {}
-                        // refill/collapse to settle the grid after collection
-                        try {
-                            await this._collapseColumn();
-                        } catch (err) {
-                            // ignore
-                        }
-                    },
-                });
-            } catch (e) {}
-        }
+        // no-op
     }
 }
