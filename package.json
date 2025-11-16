@@ -1,0 +1,22 @@
+{
+  "name": "cashcow",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "gsap": "^3.13.0",
+    "pixi.js": "^8.14.1"
+  },
+  "devDependencies": {
+    "vite": "^6.4.1"
+  }
+}
