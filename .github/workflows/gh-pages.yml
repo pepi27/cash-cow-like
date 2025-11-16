@@ -1,5 +1,11 @@
 name: Build and Deploy to GitHub Pages
 
+# Grant the workflow explicit permissions required to push to gh-pages
+permissions:
+    contents: write
+    pages: write
+    id-token: write
+
 on:
     push:
         branches:
@@ -12,6 +18,9 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  persist-credentials: true
 
             - name: Use Node.js
               uses: actions/setup-node@v4
@@ -23,6 +32,11 @@ jobs:
 
             - name: Build
               run: npm run build
+
+            - name: Setup git user
+              run: |
+                  git config --global user.name "github-actions[bot]"
+                  git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
             - name: Deploy to GitHub Pages
               uses: peaceiris/actions-gh-pages@v4
