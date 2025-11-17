@@ -219,8 +219,21 @@ export class Grid extends Container {
             const sum = sel.reduce((acc, s) => acc + (Number(s.cell.value) || 0), 0);
             const target = sel[sel.length - 1];
 
-            // if sum is not one of allowed values, cancel merge with a small shake and un-highlight
-            if (!this.values.includes(sum)) {
+            // determine resulting merged value. By default the sum must be an allowed value, but
+            // special-case: 5 + 10 (sum 15) should produce 25.
+            let resultValue = null;
+            if (this.values.includes(sum)) {
+                resultValue = sum;
+            } else {
+                const has5 = sel.some((s) => Number(s.cell.value) === 5);
+                const has10 = sel.some((s) => Number(s.cell.value) === 10);
+                if (sum === 25 && has5 && has10) {
+                    resultValue = 25;
+                }
+            }
+
+            // if resultValue is still null, cancel merge with a small shake and un-highlight
+            if (resultValue == null) {
                 // small shake on target
                 const origX = target.cell.x;
                 gsap.to(target.cell, {
@@ -266,11 +279,13 @@ export class Grid extends Container {
                     },
                 }
             );
-            // add merged value to the score
+            // add resulting merged value to the score
             try {
-                this.score = (Number(this.score) || 0) + Number(sum);
+                this.score = (Number(this.score) || 0) + Number(resultValue);
             } catch (e) {}
-            target.cell.setValue(Number(sum));
+            target.cell.setValue(
+                Number.isFinite(Number(resultValue)) ? Number(resultValue) : resultValue
+            );
 
             // after fade animation, clear others and collapse
             await new Promise((resolve) => setTimeout(resolve, 220));
@@ -339,9 +354,15 @@ export class Grid extends Container {
         // ignore if already in path
         if (sel.some((s) => s.r === r && s.c === c)) return;
 
-        // must match the selected value
-        const baseValue = sel[0].cell.value;
-        if (cell.value == null || cell.value !== baseValue) return;
+        // must match the selected value (allow mixing 5s and 10s)
+        const baseValue = Number(sel[0].cell.value);
+        const candidateValue = Number(cell.value);
+        if (cell.value == null) return;
+        // allow either same-value selections OR mixing 5 and 10 together
+        const allowMix5and10 =
+            (baseValue === 5 || baseValue === 10) &&
+            (candidateValue === 5 || candidateValue === 10);
+        if (!(candidateValue === baseValue || allowMix5and10)) return;
 
         // allow adding if the cell is adjacent to ANY selected cell (not just last)
         const adjacentToAny = sel.some((s) => this._isAdjacent(s.r, s.c, r, c));
