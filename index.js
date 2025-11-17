@@ -8,7 +8,8 @@ import { Grid } from './Grid.js';
     globalThis.__PIXI_APP__ = app;
 
     // Initialize the application
-    await app.init({ background: '#1099bb', resizeTo: window });
+    // use a darker neutral background to match the new cell color palette
+    await app.init({ background: '#0b1220', resizeTo: window });
 
     // Append the application canvas to the document body
     document.body.appendChild(app.canvas);

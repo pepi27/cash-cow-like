@@ -15,6 +15,8 @@ export class SquareWithText extends Container {
             fontName = 'Desyrel',
             fontSize = 64,
             tint = 0xffffff,
+            // optional map of value -> background color
+            colorMap = null,
         } = options;
 
         this._size = size;
@@ -22,6 +24,17 @@ export class SquareWithText extends Container {
         this._fontName = fontName;
         this._fontSize = fontSize;
         this._tint = tint;
+        // default palette for common values; can be overridden by options.colorMap
+        this._defaultColorMap = {
+            1: 0x555555,
+            5: 0x3b82f6, // blue
+            10: 0x10b981, // green
+            25: 0xf59e0b, // amber
+            50: 0xef4444, // red
+            100: 0x8b5cf6, // purple
+            500: 0xffd700, // gold
+        };
+        this._colorMap = colorMap || this._defaultColorMap;
 
         // background square centered at (0,0)
         this.bg = new Graphics();
@@ -47,7 +60,15 @@ export class SquareWithText extends Container {
     // unified background redraw; if color omitted, choose gold for value 500 or default fill
     _redrawBg(color) {
         const size = this._size;
-        const fillColor = color ?? (this.value === 500 ? 0xffd700 : this._defaultFill ?? 0x333333);
+        // pick color by priority: explicit color arg -> colorMap by value -> default fill
+        let fillColor = color;
+        if (fillColor == null) {
+            if (this.value != null && this._colorMap && this._colorMap[this.value] != null) {
+                fillColor = this._colorMap[this.value];
+            } else {
+                fillColor = this._defaultFill ?? 0x333333;
+            }
+        }
         this.bg.clear();
         this.bg.beginFill(fillColor);
         // rounded rect for nicer visuals
@@ -71,12 +92,19 @@ export class SquareWithText extends Container {
         this.bitmap.pivot.x = (this.bitmap.width || 0) / 2;
         this.bitmap.pivot.y = (this.bitmap.height || 0) / 2;
 
-        // redraw background and tint based on value
-        if (this.value === 500) {
-            this.bitmap.tint = 0x000000;
-        } else {
-            this.bitmap.tint = this._tint;
-        }
+        // redraw background and pick a readable text tint based on background brightness
+        // determine background color used
+        const bgColor =
+            this.value != null && this._colorMap && this._colorMap[this.value] != null
+                ? this._colorMap[this.value]
+                : this._defaultFill;
+        // compute simple brightness (0..255) from RGB
+        const r = (bgColor >> 16) & 0xff;
+        const g = (bgColor >> 8) & 0xff;
+        const b = bgColor & 0xff;
+        const brightness = r * 0.299 + g * 0.587 + b * 0.114;
+        // choose black text for bright backgrounds (e.g. gold), white otherwise
+        this.bitmap.tint = brightness > 160 ? 0x000000 : this._tint;
         this._redrawBg();
     }
 
