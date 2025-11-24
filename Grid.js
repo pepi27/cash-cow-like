@@ -1,7 +1,7 @@
 import { Container, Graphics } from 'pixi.js';
 import { SquareWithText } from './SquareWithText.js';
 import { gsap } from 'gsap';
-import { fromEventPattern } from 'rxjs';
+import { fromEventPattern, BehaviorSubject } from 'rxjs';
 
 export class Grid extends Container {
     /**
@@ -105,8 +105,13 @@ export class Grid extends Container {
         this._selection = [];
         this._isPointerDown = false;
         this.autoMerge = autoMerge;
-        // score
+        // score (imperative) and observable score stream for external subscribers
         this.score = 0;
+        try {
+            this.score$ = new BehaviorSubject(this.score);
+        } catch (e) {
+            this.score$ = null;
+        }
 
         // enable interaction
         this.interactive = true;
@@ -322,6 +327,10 @@ export class Grid extends Container {
             // add resulting merged value to the score
             try {
                 this.score = (Number(this.score) || 0) + Number(resultValue);
+            } catch (e) {}
+            try {
+                if (this.score$ && typeof this.score$.next === 'function')
+                    this.score$.next(this.score);
             } catch (e) {}
             target.cell.setValue(
                 Number.isFinite(Number(resultValue)) ? Number(resultValue) : resultValue

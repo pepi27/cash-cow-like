@@ -32,13 +32,25 @@ import { Grid } from './Grid.js';
     hud.zIndex = 1000;
     app.stage.addChild(hud);
 
-    // update HUD every frame
-    app.ticker.add(() => {
-        try {
-            hud.text = `Score: ${grid.score}`;
-            hud.updateTransform();
-        } catch (e) {}
-    });
+    // update HUD via score$ if available, otherwise fallback to per-frame polling
+    if (grid.score$ && typeof grid.score$.subscribe === 'function') {
+        const sub = grid.score$.subscribe((s) => {
+            try {
+                hud.text = `Score: ${s}`;
+                hud.updateTransform();
+            } catch (e) {}
+        });
+        // ensure we unsubscribe on window unload
+        window.addEventListener('beforeunload', () => sub.unsubscribe());
+    } else {
+        // fallback per-frame update
+        app.ticker.add(() => {
+            try {
+                hud.text = `Score: ${grid.score}`;
+                hud.updateTransform();
+            } catch (e) {}
+        });
+    }
 
     // keep scene centered and allow grid to react to size changes
     const onResize = () => {
