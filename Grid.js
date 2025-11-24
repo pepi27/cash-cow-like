@@ -1,7 +1,8 @@
 import { Container, Graphics } from 'pixi.js';
 import { SquareWithText } from './SquareWithText.js';
 import { gsap } from 'gsap';
-import { fromEventPattern, BehaviorSubject } from 'rxjs';
+import { fromEventPattern, BehaviorSubject, merge } from 'rxjs';
+import { map, filter, tap, switchMap, takeUntil, finalize } from 'rxjs/operators';
 
 export class Grid extends Container {
     /**
@@ -124,14 +125,51 @@ export class Grid extends Container {
                 (h) => this.off(eventName, h)
             );
 
-        // subscribe to pointer event streams and forward to existing handlers
+        // Compose a single drag/selection stream instead of multiple imperative subscribers
         try {
             this._inputSubs = [];
-            this._inputSubs.push(make$('pointerdown').subscribe((e) => this._onPointerDown(e)));
-            this._inputSubs.push(make$('pointermove').subscribe((e) => this._onPointerMove(e)));
-            this._inputSubs.push(make$('pointerup').subscribe(() => this._onPointerUp()));
-            this._inputSubs.push(make$('pointerupoutside').subscribe(() => this._onPointerUp()));
-            this._inputSubs.push(make$('pointertap').subscribe((e) => this._onTap(e)));
+
+            const pointerDown$ = make$('pointerdown');
+            const pointerMove$ = make$('pointermove');
+            const pointerUp$ = merge(make$('pointerup'), make$('pointerupoutside'));
+            const pointerTap$ = make$('pointertap');
+
+            const dragSub = pointerDown$
+                .pipe(
+                    map((e) => e.data.global),
+                    map((g) => this.getCellAtPoint(g.x, g.y)),
+                    filter(Boolean),
+                    tap((hit) => {
+                        // start selection on pointer down
+                        this._isPointerDown = true;
+                        this._selection = [{ r: hit.r, c: hit.c, cell: hit.cell }];
+                        this._highlightCell(hit.cell, true);
+                        this._updatePathGraphics();
+                    }),
+                    switchMap(() =>
+                        pointerMove$.pipe(
+                            map((e) => e.data.global),
+                            map((g) => this.getCellAtPoint(g.x, g.y)),
+                            filter(Boolean),
+                            tap((hit) => {
+                                this._tryExtendPath(hit.r, hit.c, hit.cell);
+                                this._updatePathGraphics();
+                            }),
+                            takeUntil(pointerUp$),
+                            finalize(() => {
+                                // when the drag ends call the existing pointer-up handler
+                                try {
+                                    this._onPointerUp();
+                                } catch (e) {}
+                            })
+                        )
+                    )
+                )
+                .subscribe();
+
+            this._inputSubs.push(dragSub);
+            // keep tap subscription separate (currently _onTap is a no-op)
+            this._inputSubs.push(pointerTap$.subscribe((e) => this._onTap(e)));
         } catch (e) {
             // fallback to direct listeners if RxJS subscription fails
             // this.on('pointerdown', (e) => this._onPointerDown(e));
