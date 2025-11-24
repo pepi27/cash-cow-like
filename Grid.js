@@ -1,6 +1,7 @@
 import { Container, Graphics } from 'pixi.js';
 import { SquareWithText } from './SquareWithText.js';
 import { gsap } from 'gsap';
+import { fromEventPattern } from 'rxjs';
 
 export class Grid extends Container {
     /**
@@ -109,13 +110,52 @@ export class Grid extends Container {
 
         // enable interaction
         this.interactive = true;
-        this.on('pointerdown', (e) => this._onPointerDown(e));
-        this.on('pointermove', (e) => this._onPointerMove(e));
-        this.on('pointerup', () => this._onPointerUp());
-        this.on('pointerupoutside', () => this._onPointerUp());
+        // create RxJS observables from PIXI event emitter hooks so input handling is reactive
+        const make$ = (eventName) =>
+            fromEventPattern(
+                // add
+                (h) => this.on(eventName, h),
+                // remove
+                (h) => this.off(eventName, h)
+            );
+
+        // subscribe to pointer event streams and forward to existing handlers
+        try {
+            this._inputSubs = [];
+            this._inputSubs.push(make$('pointerdown').subscribe((e) => this._onPointerDown(e)));
+            this._inputSubs.push(make$('pointermove').subscribe((e) => this._onPointerMove(e)));
+            this._inputSubs.push(make$('pointerup').subscribe(() => this._onPointerUp()));
+            this._inputSubs.push(make$('pointerupoutside').subscribe(() => this._onPointerUp()));
+            this._inputSubs.push(make$('pointertap').subscribe((e) => this._onTap(e)));
+        } catch (e) {
+            // fallback to direct listeners if RxJS subscription fails
+            // this.on('pointerdown', (e) => this._onPointerDown(e));
+            // this.on('pointermove', (e) => this._onPointerMove(e));
+            // this.on('pointerup', () => this._onPointerUp());
+            // this.on('pointerupoutside', () => this._onPointerUp());
+            // this.on('pointertap', (e) => this._onTap(e));
+        }
 
         // tap to collect gold
-        this.on('pointertap', (e) => this._onTap(e));
+        // this.on('pointertap', (e) => this._onTap(e));
+    }
+
+    destroy(options) {
+        // unsubscribe input subscriptions if any
+        try {
+            if (this._inputSubs && Array.isArray(this._inputSubs)) {
+                this._inputSubs.forEach((s) => {
+                    try {
+                        s.unsubscribe && s.unsubscribe();
+                    } catch (e) {}
+                });
+                this._inputSubs = null;
+            }
+        } catch (e) {}
+        // call parent destroy if available
+        try {
+            if (super.destroy) super.destroy(options);
+        } catch (e) {}
     }
 
     getCell(row, col) {
