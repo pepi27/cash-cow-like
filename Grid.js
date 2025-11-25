@@ -1,7 +1,16 @@
 import { Container, Graphics } from 'pixi.js';
 import { SquareWithText } from './SquareWithText.js';
 import { gsap } from 'gsap';
-import { fromEventPattern, BehaviorSubject, merge } from 'rxjs';
+import {
+    fromEventPattern,
+    BehaviorSubject,
+    merge,
+    forkJoin,
+    lastValueFrom,
+    Observable,
+    Subject,
+    of,
+} from 'rxjs';
 import { map, filter, tap, switchMap, takeUntil, finalize } from 'rxjs/operators';
 
 export class Grid extends Container {
@@ -116,6 +125,8 @@ export class Grid extends Container {
 
         // enable interaction
         this.interactive = true;
+        // lifecycle subject used to cancel streams/animations on destroy
+        this._destroy$ = new Subject();
         // create RxJS observables from PIXI event emitter hooks so input handling is reactive
         const make$ = (eventName) =>
             fromEventPattern(
@@ -156,6 +167,7 @@ export class Grid extends Container {
                                 this._updatePathGraphics();
                             }),
                             takeUntil(pointerUp$),
+                            takeUntil(this._destroy$),
                             finalize(() => {
                                 // when the drag ends call the existing pointer-up handler
                                 try {
@@ -163,13 +175,16 @@ export class Grid extends Container {
                                 } catch (e) {}
                             })
                         )
-                    )
+                    ),
+                    takeUntil(this._destroy$)
                 )
                 .subscribe();
 
             this._inputSubs.push(dragSub);
             // keep tap subscription separate (currently _onTap is a no-op)
-            this._inputSubs.push(pointerTap$.subscribe((e) => this._onTap(e)));
+            this._inputSubs.push(
+                pointerTap$.pipe(takeUntil(this._destroy$)).subscribe((e) => this._onTap(e))
+            );
         } catch (e) {
             // fallback to direct listeners if RxJS subscription fails
             // this.on('pointerdown', (e) => this._onPointerDown(e));
@@ -193,6 +208,18 @@ export class Grid extends Container {
                     } catch (e) {}
                 });
                 this._inputSubs = null;
+            }
+        } catch (e) {}
+        // signal and complete destroy subject to cancel streams/tweens
+        try {
+            if (this._destroy$) {
+                try {
+                    this._destroy$.next();
+                } catch (e) {}
+                try {
+                    this._destroy$.complete();
+                } catch (e) {}
+                this._destroy$ = null;
             }
         } catch (e) {}
         // call parent destroy if available
@@ -248,6 +275,66 @@ export class Grid extends Container {
         return cell.content && cell.content.scale ? cell.content.scale : cell.scale;
     }
 
+    // Helper: wrap gsap.to as an Observable that completes when the tween completes
+    _tweenTo$(target, vars) {
+        return new Observable((subscriber) => {
+            const cfg = Object.assign({}, vars);
+            // override onComplete to notify the observable
+            const userOnComplete = cfg.onComplete;
+            cfg.onComplete = function () {
+                try {
+                    if (typeof userOnComplete === 'function') userOnComplete.apply(this, arguments);
+                } catch (e) {}
+                try {
+                    subscriber.next(true);
+                } catch (e) {}
+                try {
+                    subscriber.complete();
+                } catch (e) {}
+            };
+
+            const tween = gsap.to(target, cfg);
+
+            // teardown: kill the tween if unsubscribed
+            return () => {
+                try {
+                    tween && tween.kill && tween.kill();
+                } catch (e) {}
+            };
+        });
+    }
+
+    _tweenFromTo$(target, fromVars, toVars) {
+        return new Observable((subscriber) => {
+            const cfg = Object.assign({}, toVars);
+            const userOnComplete = cfg.onComplete;
+            cfg.onComplete = function () {
+                try {
+                    if (typeof userOnComplete === 'function') userOnComplete.apply(this, arguments);
+                } catch (e) {}
+                try {
+                    subscriber.next(true);
+                } catch (e) {}
+                try {
+                    subscriber.complete();
+                } catch (e) {}
+            };
+
+            // set initial properties if provided
+            try {
+                if (fromVars) gsap.set(target, fromVars);
+            } catch (e) {}
+
+            const tween = gsap.to(target, cfg);
+
+            return () => {
+                try {
+                    tween && tween.kill && tween.kill();
+                } catch (e) {}
+            };
+        });
+    }
+
     // show / hide a lightweight highlight overlay on a cell
     _highlightCell(cell, on) {
         if (!cell) return;
@@ -293,7 +380,7 @@ export class Grid extends Container {
         this._updatePathGraphics();
     }
 
-    async _onPointerUp() {
+    _onPointerUp() {
         if (!this._isPointerDown) return;
         this._isPointerDown = false;
         const sel = this._selection;
@@ -375,29 +462,76 @@ export class Grid extends Container {
             );
 
             // after fade animation, clear others and collapse
-            await new Promise((resolve) => setTimeout(resolve, 220));
-            // clear non-target selected cells and remove their highlights immediately
-            for (let s of sel) {
-                if (s === target) continue;
+            setTimeout(() => {
+                // clear non-target selected cells and remove their highlights immediately
+                for (let s of sel) {
+                    if (s === target) continue;
+                    try {
+                        s.cell.setValue(null);
+                        s.cell.alpha = 1;
+                        this._highlightCell(s.cell, false);
+                    } catch (e) {}
+                }
+
+                // keep only the target selected so the path clears; update visuals before collapse
+                this._selection = [target];
+                this._updatePathGraphics();
+
+                // call collapse (returns Observable). Subscribe so we can clear selection after completion.
                 try {
-                    s.cell.setValue(null);
-                    s.cell.alpha = 1;
-                    this._highlightCell(s.cell, false);
-                } catch (e) {}
-            }
-
-            // keep only the target selected so the path clears; update visuals before collapse
-            this._selection = [target];
-            this._updatePathGraphics();
-
-            await this._collapseColumn();
-            // auto-merge disabled: do not run the automatic merge loop here
+                    const collapse$ = this._collapseColumn();
+                    if (collapse$ && typeof collapse$.subscribe === 'function') {
+                        collapse$.subscribe({
+                            next: () => {},
+                            error: () => {
+                                try {
+                                    this._selection = [];
+                                    this._updatePathGraphics();
+                                } catch (e) {}
+                            },
+                            complete: () => {
+                                try {
+                                    this._selection = [];
+                                    this._updatePathGraphics();
+                                } catch (e) {}
+                            },
+                        });
+                    } else if (collapse$ && typeof collapse$.then === 'function') {
+                        // in case it returns a Promise
+                        collapse$.then(
+                            () => {
+                                try {
+                                    this._selection = [];
+                                    this._updatePathGraphics();
+                                } catch (e) {}
+                            },
+                            () => {
+                                try {
+                                    this._selection = [];
+                                    this._updatePathGraphics();
+                                } catch (e) {}
+                            }
+                        );
+                    } else {
+                        // fallback immediate cleanup
+                        try {
+                            this._selection = [];
+                            this._updatePathGraphics();
+                        } catch (e) {}
+                    }
+                } catch (e) {
+                    try {
+                        this._selection = [];
+                        this._updatePathGraphics();
+                    } catch (e) {}
+                }
+            }, 220);
         } else {
             // un-highlight
             sel.forEach((s) => this._highlightCell(s.cell, false));
+            this._selection = [];
+            this._updatePathGraphics();
         }
-        this._selection = [];
-        this._updatePathGraphics();
     }
 
     _updatePathGraphics() {
@@ -464,7 +598,7 @@ export class Grid extends Container {
     _collapseColumn() {
         // animate collapse where existing non-null cells fall to their destination rows
         this.interactive = false;
-        const animations = [];
+        const animations$ = [];
 
         for (let c = 0; c < this.cols; c++) {
             // gather source cells and values top->bottom
@@ -483,9 +617,7 @@ export class Grid extends Container {
             );
             const finalVals = newVals.concat(nonNullVals); // top->bottom final values
 
-            // Map each non-null source (in original top->bottom order) to a destination index: destIndex = emptyCount + i
             let nonNullIndex = 0;
-            const usedSourceIndices = [];
 
             for (let r = 0; r < this.rows; r++) {
                 const destCell = this._cells[r][c];
@@ -493,7 +625,6 @@ export class Grid extends Container {
 
                 if (r < emptyCount) {
                     // spawn new falling square from above
-                    // hide the destination cell until the spawn lands so it doesn't show as empty
                     try {
                         destCell.visible = false;
                     } catch (e) {}
@@ -506,13 +637,16 @@ export class Grid extends Container {
                     spawn.alpha = 0;
                     this.addChild(spawn);
 
-                    const prom = new Promise((resolve) => {
-                        gsap.to(spawn, {
-                            y: destCell.y,
-                            alpha: 1,
-                            duration: 0.35 + Math.random() * 0.12,
-                            ease: 'power2.out',
-                            onComplete: () => {
+                    const dur = 0.35 + Math.random() * 0.12;
+                    const obs$ = this._tweenTo$(spawn, {
+                        y: destCell.y,
+                        alpha: 1,
+                        duration: dur,
+                        ease: 'power2.out',
+                    })
+                        .pipe(
+                            // perform side-effects when tween completes
+                            tap(() => {
                                 destCell.setValue(
                                     Number.isFinite(Number(targetVal))
                                         ? Number(targetVal)
@@ -522,13 +656,11 @@ export class Grid extends Container {
                                     destCell.visible = true;
                                 } catch (e) {}
                                 this.removeChild(spawn);
-                                resolve();
-                            },
-                        });
-                    });
-                    animations.push(prom);
+                            })
+                        )
+                        .pipe(takeUntil(this._destroy$));
+                    animations$.push(obs$);
                 } else {
-                    // assign from next non-null source
                     const valueToPlace = nonNullVals[nonNullIndex++];
                     // find the source index corresponding to this non-null occurrence
                     let foundIdx = -1;
@@ -545,12 +677,8 @@ export class Grid extends Container {
                     const sourceCell = foundIdx >= 0 ? srcCells[foundIdx] : null;
 
                     if (sourceCell) {
-                        // hide destination until the temp arrives
-                        try {
-                            destCell.visible = false;
-                        } catch (e) {}
-                        // create temp visual at source and animate to dest
-                        const temp = new SquareWithText(sourceCell.value, {
+                        // animate existing cell drop to target
+                        const temp = new SquareWithText(valueToPlace, {
                             size: this.squareSize,
                             fontSize: Math.min(32, this.squareSize / 2),
                         });
@@ -558,16 +686,16 @@ export class Grid extends Container {
                         temp.y = sourceCell.y;
                         this.addChild(temp);
 
-                        // clear source cell immediately
-                        sourceCell.setValue(null);
-
-                        const prom = new Promise((resolve) => {
-                            gsap.to(temp, {
-                                x: destCell.x,
-                                y: destCell.y,
-                                duration: 0.25 + Math.random() * 0.2,
-                                ease: 'power2.inOut',
-                                onComplete: () => {
+                        // smooth drop to destination
+                        const dur = 0.24 + Math.random() * 0.08;
+                        const obs$ = this._tweenTo$(temp, {
+                            x: destCell.x,
+                            y: destCell.y,
+                            duration: dur,
+                            ease: 'power2.inOut',
+                        })
+                            .pipe(
+                                tap(() => {
                                     destCell.setValue(
                                         Number.isFinite(Number(valueToPlace))
                                             ? Number(valueToPlace)
@@ -577,32 +705,19 @@ export class Grid extends Container {
                                         destCell.visible = true;
                                     } catch (e) {}
                                     this.removeChild(temp);
-                                    resolve();
-                                },
-                            });
-                        });
-                        animations.push(prom);
-                    } else {
-                        // fallback: direct set
-                        destCell.setValue(
-                            Number.isFinite(Number(valueToPlace))
-                                ? Number(valueToPlace)
-                                : valueToPlace
-                        );
-                        try {
-                            destCell.visible = true;
-                        } catch (e) {}
+                                })
+                            )
+                            .pipe(takeUntil(this._destroy$));
+                        animations$.push(obs$);
                     }
                 }
             }
         }
 
-        return Promise.all(animations).then(() => {
-            this.interactive = true;
-            // ensure any leftover path visuals are removed after collapse completes
+        // create cleanup routine
+        const cleanup = () => {
             try {
                 if (this.pathGraphics) this.pathGraphics.clear();
-                // also remove any lingering highlights on cells
                 if (this._selection && this._selection.length) {
                     this._selection.forEach((s) => {
                         try {
@@ -610,7 +725,6 @@ export class Grid extends Container {
                         } catch (e) {}
                     });
                 }
-                // ensure all cells are visible after collapse
                 for (let rr = 0; rr < this.rows; rr++) {
                     for (let cc = 0; cc < this.cols; cc++) {
                         try {
@@ -621,51 +735,20 @@ export class Grid extends Container {
                 }
                 this._selection = [];
             } catch (e) {}
-        });
-    }
+        };
 
-    _findGroups() {
-        const visited = Array.from({ length: this.rows }, () => Array(this.cols).fill(false));
-        const groups = [];
-
-        for (let r = 0; r < this.rows; r++) {
-            for (let c = 0; c < this.cols; c++) {
-                if (visited[r][c]) continue;
-                const v = this._cells[r][c].value;
-                if (v == null) {
-                    visited[r][c] = true;
-                    continue;
-                }
-                // BFS
-                const q = [[r, c]];
-                const group = [];
-                visited[r][c] = true;
-                while (q.length) {
-                    const [cr, cc] = q.shift();
-                    group.push({ r: cr, c: cc });
-                    const neighbors = [
-                        [cr - 1, cc],
-                        [cr + 1, cc],
-                        [cr, cc - 1],
-                        [cr, cc + 1],
-                    ];
-                    for (let [nr, nc] of neighbors) {
-                        if (nr < 0 || nc < 0 || nr >= this.rows || nc >= this.cols) continue;
-                        if (visited[nr][nc]) continue;
-                        if (this._cells[nr][nc].value === v) {
-                            visited[nr][nc] = true;
-                            q.push([nr, nc]);
-                        }
-                    }
-                }
-                if (group.length > 0) groups.push({ value: v, cells: group });
-            }
+        if (!animations$ || animations$.length === 0) {
+            this.interactive = true;
+            cleanup();
+            return of(null).pipe(takeUntil(this._destroy$));
         }
-        return groups;
-    }
 
-    // _onTap intentionally does nothing: tapping no longer collects special gold values or triggers merges.
-    _onTap(e) {
-        // no-op
+        return forkJoin(animations$).pipe(
+            takeUntil(this._destroy$),
+            finalize(() => {
+                this.interactive = true;
+                cleanup();
+            })
+        );
     }
 }
