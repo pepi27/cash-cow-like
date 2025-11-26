@@ -808,6 +808,36 @@ export class Grid extends Container {
         } catch (e) {}
     }
 
+    // Build a drawable path from a component (path where each cell is adjacent to previous)
+    _buildDrawablePath(compCoords, targetLen) {
+        if (!compCoords || compCoords.length < targetLen) return null;
+
+        // Try starting from each cell in the component
+        for (let startIdx = 0; startIdx < compCoords.length; startIdx++) {
+            const path = [compCoords[startIdx]];
+            const remaining = compCoords.filter((_, i) => i !== startIdx);
+
+            while (path.length < targetLen && remaining.length > 0) {
+                const last = path[path.length - 1];
+                // Find next adjacent cell in remaining
+                const nextIdx = remaining.findIndex(
+                    (c) => Math.abs(c.r - last.r) + Math.abs(c.c - last.c) === 1
+                );
+
+                if (nextIdx === -1) break; // no adjacent cell found
+
+                path.push(remaining[nextIdx]);
+                remaining.splice(nextIdx, 1);
+            }
+
+            if (path.length >= targetLen) {
+                return path.slice(0, targetLen).map((x) => ({ r: x.r, c: x.c }));
+            }
+        }
+
+        return null;
+    }
+
     // Find a sample valid move (returns array of {r,c} or null)
     _findHintMove() {
         // reuse connected component logic but return an actual subset when possible
@@ -861,8 +891,8 @@ export class Grid extends Container {
                         const v = compCoords[0].v;
                         for (let k = this.minCollectLen; k <= compCoords.length; k++) {
                             if (this.values.includes(v * k)) {
-                                // return first k coords
-                                return compCoords.slice(0, k).map((x) => ({ r: x.r, c: x.c }));
+                                // return a valid drawable path of k cells
+                                return this._buildDrawablePath(compCoords, k);
                             }
                         }
                     }
@@ -871,32 +901,21 @@ export class Grid extends Container {
                     const mix = compCoords.filter((x) => x.v === 5 || x.v === 10);
                     if (mix.length >= this.minCollectLen) {
                         const maxSize = Math.min(mix.length, 6);
-                        // attempt combinations via recursion
-                        const res = (function tryCombos(arr, minLen, valuesArr) {
-                            const n = arr.length;
-                            function helper(start, chosen) {
-                                if (chosen.length >= minLen) {
-                                    const sum = chosen.reduce((s, idx) => s + arr[idx].v, 0);
-                                    if (
-                                        valuesArr.includes(sum) ||
-                                        (sum === 25 &&
-                                            chosen.some((i) => arr[i].v === 5) &&
-                                            chosen.some((i) => arr[i].v === 10))
-                                    ) {
-                                        return chosen.map((i) => ({ r: arr[i].r, c: arr[i].c }));
-                                    }
+                        // Try to build drawable paths of increasing length from mix
+                        for (let len = this.minCollectLen; len <= maxSize; len++) {
+                            const path = this._buildDrawablePath(mix, len);
+                            if (path) {
+                                const coords = path.map((p) =>
+                                    mix.find((m) => m.r === p.r && m.c === p.c)
+                                );
+                                const sum = coords.reduce((s, c) => s + c.v, 0);
+                                const has5 = coords.some((c) => c.v === 5);
+                                const has10 = coords.some((c) => c.v === 10);
+                                if (this.values.includes(sum) || (sum === 25 && has5 && has10)) {
+                                    return path;
                                 }
-                                if (chosen.length >= maxSize) return null;
-                                for (let i = start; i < n; i++) {
-                                    const out = helper(i + 1, chosen.concat(i));
-                                    if (out) return out;
-                                }
-                                return null;
                             }
-                            return helper(0, []);
-                        })(mix, this.minCollectLen, this.values);
-
-                        if (res) return res;
+                        }
                     }
                 }
             }
