@@ -251,8 +251,8 @@ export class Grid extends Container {
             this._checkGameOver();
         } catch (e) {}
 
-        // hint state (one-time use per game)
-        this._hintUsed = false;
+        // hint state
+        this._hintAnimating = false;
         this._hintButton = null;
         try {
             const hbStyle = { fontFamily: 'Arial', fontSize: 18, fill: '#ffffff' };
@@ -805,15 +805,6 @@ export class Grid extends Container {
                     this.score$.next(this.score);
             } catch (e) {}
             this.hideGameOver();
-            // reset hint availability
-            try {
-                this._hintUsed = false;
-                if (this._hintButton) {
-                    this._hintButton.alpha = 1;
-                    this._hintButton.interactive = true;
-                    this._hintButton.buttonMode = true;
-                }
-            } catch (e) {}
         } catch (e) {}
     }
 
@@ -1074,25 +1065,18 @@ export class Grid extends Container {
         );
     }
 
-    // Use hint: find a move and highlight cells briefly; only once per game
+    // Use hint: find a move and highlight cells briefly
     _useHint() {
         try {
-            if (this._hintUsed) return;
+            if (this._hintAnimating) return;
             if (this._gameOverContainer && this._gameOverContainer.visible) return;
             const move = this._findHintMove();
             if (!move || !move.length) {
                 // no move available
                 return;
             }
-            this._hintUsed = true;
-            if (this._hintButton) {
-                try {
-                    this._hintButton.alpha = 0.5;
-                    this._hintButton.interactive = false;
-                    this._hintButton.buttonMode = false;
-                } catch (e) {}
-            }
 
+            this._hintAnimating = true;
             // highlight the suggested cells briefly
             const hintCells = [];
             for (let p of move) {
@@ -1213,6 +1197,7 @@ export class Grid extends Container {
                         }
                     } catch (e) {}
                 }
+                this._hintAnimating = false;
             }, 1200);
         } catch (e) {}
     }
