@@ -1,4 +1,4 @@
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Text, BlurFilter } from 'pixi.js';
 import { SquareWithText } from './SquareWithText.js';
 import { gsap } from 'gsap';
 import {
@@ -449,6 +449,10 @@ export class Grid extends Container {
         if (!hit) return;
         this._tryExtendPath(hit.r, hit.c, hit.cell);
         this._updatePathGraphics();
+    }
+
+    _onTap(e) {
+        // tap-to-select is intentionally disabled; method exists to satisfy pointerTap subscription
     }
 
     _onPointerUp() {
@@ -1090,12 +1094,11 @@ export class Grid extends Container {
             }
 
             // highlight the suggested cells briefly
-            const highlightCells = [];
+            const hintCells = [];
             for (let p of move) {
                 try {
                     const cell = this._cells[p.r][p.c];
-                    this._highlightCell(cell, true);
-                    highlightCells.push(cell);
+                    hintCells.push(cell);
                     try {
                         // remove existing hint border if present
                         if (cell._hintBorder) {
@@ -1122,28 +1125,64 @@ export class Grid extends Container {
                                 ? cell._size
                                 : this.squareSize;
                         const border = new Graphics();
-                        border.lineStyle(Math.max(3, Math.floor(size * 0.06)), 0xffff00, 0.95);
-                        const pad = Math.max(2, Math.floor(size * 0.06));
-                        border.drawRect(
+                        const strokeWidth = Math.max(4, Math.floor(size * 0.14));
+                        const pad = Math.max(4, Math.floor(size * 0.12));
+                        try {
+                            border.lineStyle({
+                                width: strokeWidth,
+                                color: 0xff2b20,
+                                alpha: 1,
+                                alignment: 0,
+                            });
+                        } catch (e) {
+                            border.lineStyle(strokeWidth, 0xff2b20, 1, 0);
+                        }
+                        try {
+                            border.beginFill(0xff0000, 0.28);
+                        } catch (e) {}
+                        border.drawRoundedRect(
                             -size / 2 - pad,
                             -size / 2 - pad,
                             size + pad * 2,
-                            size + pad * 2
+                            size + pad * 2,
+                            Math.max(6, size * 0.12)
                         );
-                        border.alpha = 0;
+                        try {
+                            border.endFill();
+                        } catch (e) {}
+                        border.alpha = 1;
+                        border.zIndex = 999;
+                        try {
+                            border.filters = [
+                                new BlurFilter({
+                                    strength: 2.6,
+                                    quality: 4,
+                                    repeatEdgePixels: true,
+                                }),
+                            ];
+                        } catch (e) {}
 
                         const attachTarget =
                             cell.content && typeof cell.content.addChild === 'function'
                                 ? cell.content
                                 : cell;
+                        try {
+                            attachTarget.sortableChildren = true;
+                        } catch (e) {}
                         attachTarget.addChild(border);
+                        try {
+                            if (typeof attachTarget.sortChildren === 'function') {
+                                attachTarget.sortChildren();
+                            }
+                        } catch (e) {}
                         cell._hintBorder = border;
                         try {
-                            const tw = gsap.fromTo(
-                                border,
-                                { alpha: 0 },
-                                { alpha: 1, duration: 0.28, yoyo: true, repeat: 1 }
-                            );
+                            const tw = gsap.to(border, {
+                                alpha: 0.55,
+                                duration: 0.22,
+                                yoyo: true,
+                                repeat: 5,
+                            });
                             border._tween = tw;
                         } catch (e) {}
                     } catch (e) {}
@@ -1151,9 +1190,8 @@ export class Grid extends Container {
             }
 
             setTimeout(() => {
-                for (let c of highlightCells) {
+                for (let c of hintCells) {
                     try {
-                        this._highlightCell(c, false);
                         // remove any hint border created
                         if (c._hintBorder) {
                             try {
