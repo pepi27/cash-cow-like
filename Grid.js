@@ -1,4 +1,4 @@
-import { Container, Graphics } from 'pixi.js';
+import { Container, Graphics, Text } from 'pixi.js';
 import { SquareWithText } from './SquareWithText.js';
 import { gsap } from 'gsap';
 import {
@@ -110,6 +110,13 @@ export class Grid extends Container {
         this.pathGraphics = new Graphics();
         this.addChild(this.pathGraphics);
 
+        // game over state observable
+        try {
+            this.gameOver$ = new BehaviorSubject(false);
+        } catch (e) {
+            this.gameOver$ = null;
+        }
+
         // gameplay values and interaction state
         this.minCollectLen = 2;
         this._selection = [];
@@ -196,6 +203,53 @@ export class Grid extends Container {
 
         // tap to collect gold
         // this.on('pointertap', (e) => this._onTap(e));
+
+        // create game-over overlay (hidden by default)
+        try {
+            this._gameOverContainer = new Container();
+            const bg = new Graphics();
+            bg.beginFill(0x000000, 0.6);
+            bg.drawRect(
+                -this.totalWidth / 2,
+                -this.totalHeight / 2,
+                this.totalWidth,
+                this.totalHeight
+            );
+            bg.endFill();
+            this._gameOverContainer.addChild(bg);
+
+            const style = {
+                fontFamily: 'Arial',
+                fontSize: Math.max(20, Math.floor(this.squareSize * 0.8)),
+                fill: '#ffffff',
+                align: 'center',
+            };
+            const label = new Text('Game Over', style);
+            label.anchor = { x: 0.5, y: 0.5 };
+            label.x = 0;
+            label.y = -20;
+            this._gameOverContainer.addChild(label);
+
+            const btnStyle = { fontFamily: 'Arial', fontSize: 16, fill: '#ffffff' };
+            const restart = new Text('Restart', btnStyle);
+            restart.anchor = { x: 0.5, y: 0.5 };
+            restart.x = 0;
+            restart.y = 30;
+            restart.interactive = true;
+            restart.buttonMode = true;
+            restart.on('pointertap', () => this.restartGame());
+            this._gameOverContainer.addChild(restart);
+
+            this._gameOverContainer.visible = false;
+            this.addChild(this._gameOverContainer);
+        } catch (e) {
+            this._gameOverContainer = null;
+        }
+
+        // initial game-over check
+        try {
+            this._checkGameOver();
+        } catch (e) {}
     }
 
     destroy(options) {
@@ -595,6 +649,144 @@ export class Grid extends Container {
         this._updatePathGraphics();
     }
 
+    // --- Game Over detection / UI ---
+    // Returns true when there exists at least one valid selectable group/move
+    _hasPossibleMove() {
+        // Find connected components of cells where selection rules permit grouping
+        const visited = Array.from({ length: this.rows }, () => Array(this.cols).fill(false));
+
+        const inBounds = (r, c) => r >= 0 && c >= 0 && r < this.rows && c < this.cols;
+
+        for (let r = 0; r < this.rows; r++) {
+            for (let c = 0; c < this.cols; c++) {
+                if (visited[r][c]) continue;
+                const val = this._cells[r][c].value;
+                if (val == null) {
+                    visited[r][c] = true;
+                    continue;
+                }
+
+                // BFS to gather connected component under selection rules
+                const q = [[r, c]];
+                const comp = [];
+                visited[r][c] = true;
+                while (q.length) {
+                    const [cr, cc] = q.shift();
+                    const cellVal = this._cells[cr][cc].value;
+                    comp.push({ r: cr, c: cc, v: Number(cellVal) });
+                    const neighbors = [
+                        [cr - 1, cc],
+                        [cr + 1, cc],
+                        [cr, cc - 1],
+                        [cr, cc + 1],
+                    ];
+                    for (let [nr, nc] of neighbors) {
+                        if (!inBounds(nr, nc)) continue;
+                        if (visited[nr][nc]) continue;
+                        const nv = this._cells[nr][nc].value;
+                        if (nv == null) continue;
+                        // two types of connectivity: same value OR mixing 5/10
+                        if (
+                            Number(nv) === Number(val) ||
+                            ((Number(val) === 5 || Number(val) === 10) &&
+                                (Number(nv) === 5 || Number(nv) === 10))
+                        ) {
+                            visited[nr][nc] = true;
+                            q.push([nr, nc]);
+                        }
+                    }
+                }
+
+                // Check if component yields any valid selection
+                if (comp.length >= this.minCollectLen) {
+                    // if all same value
+                    const allSame = comp.every((x) => x.v === comp[0].v);
+                    if (allSame) {
+                        const v = comp[0].v;
+                        for (let k = this.minCollectLen; k <= comp.length; k++) {
+                            if (this.values.includes(v * k)) return true;
+                        }
+                    }
+
+                    // check 5/10 mixing possibilities
+                    const count5 = comp.filter((x) => x.v === 5).length;
+                    const count10 = comp.filter((x) => x.v === 10).length;
+                    if (count5 + count10 >= this.minCollectLen && (count5 > 0 || count10 > 0)) {
+                        // brute force combinations up to component size
+                        const maxTotal = Math.min(comp.length, count5 + count10);
+                        for (let total = this.minCollectLen; total <= maxTotal; total++) {
+                            for (let n10 = 0; n10 <= Math.min(total, count10); n10++) {
+                                const n5 = total - n10;
+                                if (n5 < 0 || n5 > count5) continue;
+                                const sum = n5 * 5 + n10 * 10;
+                                if (this.values.includes(sum)) return true;
+                                if (sum === 25 && n5 > 0 && n10 > 0) return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    _checkGameOver() {
+        try {
+            const hasMove = this._hasPossibleMove();
+            if (!hasMove) {
+                this.showGameOver();
+                try {
+                    if (this.gameOver$ && typeof this.gameOver$.next === 'function')
+                        this.gameOver$.next(true);
+                } catch (e) {}
+            } else {
+                this.hideGameOver();
+                try {
+                    if (this.gameOver$ && typeof this.gameOver$.next === 'function')
+                        this.gameOver$.next(false);
+                } catch (e) {}
+            }
+        } catch (e) {}
+    }
+
+    showGameOver() {
+        try {
+            if (this._gameOverContainer) this._gameOverContainer.visible = true;
+            this.interactive = false;
+        } catch (e) {}
+    }
+
+    hideGameOver() {
+        try {
+            if (this._gameOverContainer) this._gameOverContainer.visible = false;
+            this.interactive = true;
+        } catch (e) {}
+    }
+
+    restartGame() {
+        try {
+            // clear and refill board, reset score
+            for (let r = 0; r < this.rows; r++) {
+                for (let c = 0; c < this.cols; c++) {
+                    const cell = this._cells[r][c];
+                    const val = this._pickWeighted(this.values, this.weights);
+                    try {
+                        cell.setValue(Number.isFinite(Number(val)) ? Number(val) : val);
+                        cell.visible = true;
+                        cell.alpha = 1;
+                        this._highlightCell(cell, false);
+                    } catch (e) {}
+                }
+            }
+            try {
+                this.score = 0;
+                if (this.score$ && typeof this.score$.next === 'function')
+                    this.score$.next(this.score);
+            } catch (e) {}
+            this.hideGameOver();
+        } catch (e) {}
+    }
+
     _collapseColumn() {
         // animate collapse where existing non-null cells fall to their destination rows
         this.interactive = false;
@@ -734,6 +926,10 @@ export class Grid extends Container {
                     }
                 }
                 this._selection = [];
+                // check for game over after collapse updates
+                try {
+                    this._checkGameOver();
+                } catch (e) {}
             } catch (e) {}
         };
 
