@@ -230,7 +230,7 @@ export class Grid extends Container {
             label.y = -20;
             this._gameOverContainer.addChild(label);
 
-            const btnStyle = { fontFamily: 'Arial', fontSize: 16, fill: '#ffffff' };
+            const btnStyle = { fontFamily: 'Arial', fontSize: 20, fill: '#ffffff' };
             const restart = new Text('Restart', btnStyle);
             restart.anchor = { x: 0.5, y: 0.5 };
             restart.x = 0;
@@ -250,6 +250,23 @@ export class Grid extends Container {
         try {
             this._checkGameOver();
         } catch (e) {}
+
+        // hint state (one-time use per game)
+        this._hintUsed = false;
+        this._hintButton = null;
+        try {
+            const hbStyle = { fontFamily: 'Arial', fontSize: 18, fill: '#ffffff' };
+            const hintBtn = new Text('Hint', hbStyle);
+            hintBtn.interactive = true;
+            hintBtn.buttonMode = true;
+            hintBtn.x = Math.floor(this.totalWidth / 2) - 40;
+            hintBtn.y = -Math.floor(this.totalHeight / 2) - 28;
+            hintBtn.on('pointertap', () => this._useHint());
+            this._hintButton = hintBtn;
+            this.addChild(hintBtn);
+        } catch (e) {
+            this._hintButton = null;
+        }
     }
 
     destroy(options) {
@@ -784,7 +801,112 @@ export class Grid extends Container {
                     this.score$.next(this.score);
             } catch (e) {}
             this.hideGameOver();
+            // reset hint availability
+            try {
+                this._hintUsed = false;
+                if (this._hintButton) {
+                    this._hintButton.alpha = 1;
+                    this._hintButton.interactive = true;
+                    this._hintButton.buttonMode = true;
+                }
+            } catch (e) {}
         } catch (e) {}
+    }
+
+    // Find a sample valid move (returns array of {r,c} or null)
+    _findHintMove() {
+        // reuse connected component logic but return an actual subset when possible
+        const inBounds = (r, c) => r >= 0 && c >= 0 && r < this.rows && c < this.cols;
+
+        const visited = Array.from({ length: this.rows }, () => Array(this.cols).fill(false));
+
+        for (let r = 0; r < this.rows; r++) {
+            for (let c = 0; c < this.cols; c++) {
+                if (visited[r][c]) continue;
+                const val = this._cells[r][c].value;
+                if (val == null) {
+                    visited[r][c] = true;
+                    continue;
+                }
+
+                // BFS build component
+                const q = [[r, c]];
+                const compCoords = [];
+                visited[r][c] = true;
+                while (q.length) {
+                    const [cr, cc] = q.shift();
+                    const cv = Number(this._cells[cr][cc].value);
+                    compCoords.push({ r: cr, c: cc, v: cv });
+                    const neighbors = [
+                        [cr - 1, cc],
+                        [cr + 1, cc],
+                        [cr, cc - 1],
+                        [cr, cc + 1],
+                    ];
+                    for (let [nr, nc] of neighbors) {
+                        if (!inBounds(nr, nc)) continue;
+                        if (visited[nr][nc]) continue;
+                        const nv = this._cells[nr][nc].value;
+                        if (nv == null) continue;
+                        if (
+                            Number(nv) === Number(val) ||
+                            ((Number(val) === 5 || Number(val) === 10) &&
+                                (Number(nv) === 5 || Number(nv) === 10))
+                        ) {
+                            visited[nr][nc] = true;
+                            q.push([nr, nc]);
+                        }
+                    }
+                }
+
+                if (compCoords.length >= this.minCollectLen) {
+                    // try same-value groups first
+                    const allSame = compCoords.every((x) => x.v === compCoords[0].v);
+                    if (allSame) {
+                        const v = compCoords[0].v;
+                        for (let k = this.minCollectLen; k <= compCoords.length; k++) {
+                            if (this.values.includes(v * k)) {
+                                // return first k coords
+                                return compCoords.slice(0, k).map((x) => ({ r: x.r, c: x.c }));
+                            }
+                        }
+                    }
+
+                    // try mixing 5/10 subsets (limit subset size to 6 for performance)
+                    const mix = compCoords.filter((x) => x.v === 5 || x.v === 10);
+                    if (mix.length >= this.minCollectLen) {
+                        const maxSize = Math.min(mix.length, 6);
+                        // attempt combinations via recursion
+                        const res = (function tryCombos(arr, minLen, valuesArr) {
+                            const n = arr.length;
+                            function helper(start, chosen) {
+                                if (chosen.length >= minLen) {
+                                    const sum = chosen.reduce((s, idx) => s + arr[idx].v, 0);
+                                    if (
+                                        valuesArr.includes(sum) ||
+                                        (sum === 25 &&
+                                            chosen.some((i) => arr[i].v === 5) &&
+                                            chosen.some((i) => arr[i].v === 10))
+                                    ) {
+                                        return chosen.map((i) => ({ r: arr[i].r, c: arr[i].c }));
+                                    }
+                                }
+                                if (chosen.length >= maxSize) return null;
+                                for (let i = start; i < n; i++) {
+                                    const out = helper(i + 1, chosen.concat(i));
+                                    if (out) return out;
+                                }
+                                return null;
+                            }
+                            return helper(0, []);
+                        })(mix, this.minCollectLen, this.values);
+
+                        if (res) return res;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     _collapseColumn() {
@@ -946,5 +1068,114 @@ export class Grid extends Container {
                 cleanup();
             })
         );
+    }
+
+    // Use hint: find a move and highlight cells briefly; only once per game
+    _useHint() {
+        try {
+            if (this._hintUsed) return;
+            if (this._gameOverContainer && this._gameOverContainer.visible) return;
+            const move = this._findHintMove();
+            if (!move || !move.length) {
+                // no move available
+                return;
+            }
+            this._hintUsed = true;
+            if (this._hintButton) {
+                try {
+                    this._hintButton.alpha = 0.5;
+                    this._hintButton.interactive = false;
+                    this._hintButton.buttonMode = false;
+                } catch (e) {}
+            }
+
+            // highlight the suggested cells briefly
+            const highlightCells = [];
+            for (let p of move) {
+                try {
+                    const cell = this._cells[p.r][p.c];
+                    this._highlightCell(cell, true);
+                    highlightCells.push(cell);
+                    try {
+                        // remove existing hint border if present
+                        if (cell._hintBorder) {
+                            try {
+                                if (cell._hintBorder._tween && cell._hintBorder._tween.kill)
+                                    cell._hintBorder._tween.kill();
+                            } catch (e) {}
+                            try {
+                                if (
+                                    cell._hintBorder.parent &&
+                                    typeof cell._hintBorder.parent.removeChild === 'function'
+                                )
+                                    cell._hintBorder.parent.removeChild(cell._hintBorder);
+                            } catch (e) {}
+                            try {
+                                if (typeof cell._hintBorder.destroy === 'function')
+                                    cell._hintBorder.destroy();
+                            } catch (e) {}
+                            cell._hintBorder = null;
+                        }
+
+                        const size =
+                            typeof cell._size === 'number' && cell._size > 0
+                                ? cell._size
+                                : this.squareSize;
+                        const border = new Graphics();
+                        border.lineStyle(Math.max(3, Math.floor(size * 0.06)), 0xffff00, 0.95);
+                        const pad = Math.max(2, Math.floor(size * 0.06));
+                        border.drawRect(
+                            -size / 2 - pad,
+                            -size / 2 - pad,
+                            size + pad * 2,
+                            size + pad * 2
+                        );
+                        border.alpha = 0;
+
+                        const attachTarget =
+                            cell.content && typeof cell.content.addChild === 'function'
+                                ? cell.content
+                                : cell;
+                        attachTarget.addChild(border);
+                        cell._hintBorder = border;
+                        try {
+                            const tw = gsap.fromTo(
+                                border,
+                                { alpha: 0 },
+                                { alpha: 1, duration: 0.28, yoyo: true, repeat: 1 }
+                            );
+                            border._tween = tw;
+                        } catch (e) {}
+                    } catch (e) {}
+                } catch (e) {}
+            }
+
+            setTimeout(() => {
+                for (let c of highlightCells) {
+                    try {
+                        this._highlightCell(c, false);
+                        // remove any hint border created
+                        if (c._hintBorder) {
+                            try {
+                                if (c._hintBorder._tween && c._hintBorder._tween.kill)
+                                    c._hintBorder._tween.kill();
+                            } catch (e) {}
+                            try {
+                                if (
+                                    c._hintBorder.parent &&
+                                    typeof c._hintBorder.parent.removeChild === 'function'
+                                )
+                                    c._hintBorder.parent.removeChild(c._hintBorder);
+                            } catch (e) {}
+                            try {
+                                if (typeof c._hintBorder.destroy === 'function')
+                                    c._hintBorder.destroy();
+                            } catch (e) {}
+                            c._hintBorder = null;
+                        }
+                    } catch (e) {}
+                }
+            }, 1200);
+        } catch (e) {}
     }
 }
