@@ -1090,8 +1090,10 @@ export class Grid extends Container {
             if (this._hintAnimating) return;
             if (this._gameOverContainer && this._gameOverContainer.visible) return;
             const move = this._findHintMove();
+            console.log('Hint move:', move);
             if (!move || !move.length) {
                 // no move available
+                log('No hint move available');
                 return;
             }
 
